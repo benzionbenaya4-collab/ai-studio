@@ -6,7 +6,13 @@
 <meta name="theme-color" content="#0b0b14">
 <title>אולפן AI – סרטים, סדרות ומשחקים</title>
 <meta name="description" content="יוצרים דמויות עם ננו בננה, כותבים עלילה עם AI, מרכיבים סרט או סדרה והופכים אותם למשחק.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="אולפן AI">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root{--bg:#0b0b14;--card:#161527;--card2:#1e1c35;--line:#2d2a4a;--txt:#f3efe6;--mut:#a8a2bd;--acc:#ffd166;--acc2:#f4a261;--ok:#2a9d8f;--err:#e63946;--warn:#e9a23b}
 *{box-sizing:border-box}
@@ -95,12 +101,31 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px;margin:6px 0}
 .toast{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 16px;max-width:640px;box-shadow:0 6px 24px #000a;transition:opacity .5s,transform .5s;font-size:14px;line-height:1.5;word-break:break-word}
 .toast.ok{border-color:var(--ok)}.toast.err{border-color:var(--err)}.toast.warn{border-color:var(--warn)}
 .toast.out{opacity:0;transform:translateY(10px)}
+/* עורך הציור */
+.pt-ov{position:fixed;inset:0;z-index:70;background:#0b0b14;display:flex;flex-direction:column}
+.pt-actions,.pt-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;background:var(--card)}
+.pt-actions{border-bottom:1px solid var(--line)}
+.pt-bar{border-top:1px solid var(--line);justify-content:center}
+.pt-stage{flex:1;min-height:0;display:grid;place-items:center;padding:6px;overflow:hidden}
+.pt-canvas{background:#fff;border-radius:8px;touch-action:none;cursor:crosshair;box-shadow:0 8px 30px #000a}
+.pt-btn{border:1px solid var(--line);background:var(--card2);color:var(--txt);border-radius:999px;padding:7px 12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.pt-btn.on{background:var(--acc);color:#1b1430;border-color:var(--acc)}
+.pt-save{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#1b1430;border:0}
+.pt-ai{background:linear-gradient(135deg,#8338ec,#3a86ff);border:0}
+.pt-sw{display:flex;flex-wrap:wrap;gap:4px}
+.pt-color{width:28px;height:28px;border-radius:50%;border:2px solid #ffffff44;cursor:pointer;padding:0}
+.pt-color.on{outline:3px solid var(--acc);outline-offset:1px}
+.pt-picker{width:36px;height:30px;border:0;background:none;padding:0;cursor:pointer}
+.pt-lbl{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--mut)}
+.pt-size{width:110px}
+@media (max-width:600px){.pt-btn{padding:6px 9px;font-size:13px}.pt-color{width:24px;height:24px}}
 </style>
 </head>
 <body>
 <header>
   <div id="logo">🎬 אולפן AI</div>
   <nav>
+    <button class="btn sm primary" id="nav-install" hidden>📲 התקנה</button>
     <button class="btn sm ghost" id="nav-home">🏠 הפרויקטים</button>
     <button class="btn sm ghost" id="nav-settings">⚙️ הגדרות</button>
   </nav>
@@ -110,6 +135,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px;margin:6px 0}
 <div id="toasts"></div>
 <script src="game-runtime.js"></script>
 <script src="player.js"></script>
+<script src="paint.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

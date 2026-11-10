@@ -725,11 +725,34 @@ const label = (t, ...c) => h('label', { class: 'fld' }, h('span', {}, t), ...c);
 const btn = (t, fn, cls = '') => h('button', { class: 'btn ' + cls, onclick: fn }, t);
 const imgOr = (src, cls, ph) => src ? h('img', { src, class: cls, alt: '' }) : h('div', { class: cls + ' empty' }, ph);
 
-function uploadImage(cb) {
-  const f = h('input', { type: 'file', accept: 'image/*' });
+const isPhone = matchMedia('(pointer: coarse)').matches;
+
+// העלאת תמונה מהמכשיר, או צילום במצלמה (camera=true פותח את המצלמה בטלפון)
+function uploadImage(cb, camera) {
+  const f = h('input', { type: 'file', accept: 'image/*', capture: camera ? 'environment' : null });
   f.onchange = () => { const file = f.files[0]; if (!file) return; const fr = new FileReader(); fr.onload = async () => cb(await compress(fr.result)); fr.readAsDataURL(file); };
   f.click();
 }
+
+// ציור עצמי – ואם יש מפתח ג׳מיני, אפשר להפוך את הציור לתמונה מקצועית
+async function paintFor(p, obj, kind) {
+  const aspect = kind === 'char' ? '1:1' : '16:9';
+  const r = await openPaint({ aspect, base: obj.img, title: kind === 'char' ? `ציור של ${obj.name}` : `סצנה: ${obj.title || ''}`, canEnhance: !!S.geminiKey });
+  if (!r) return;
+  obj.img = await compress(r.img); save(p); render();
+  if (r.enhance) {
+    const what = kind === 'char' ? `The character ${obj.name} (${obj.role || ''}): ${obj.visual || ''}` : `Scene: ${obj.imagePrompt || obj.narration || ''}`;
+    await withBusy('ננו בננה הופך את הציור לתמונה 🍌…', async () => {
+      obj.img = await compress(await geminiImage(`${styleEn(p)}. Turn this hand-drawn sketch (the reference image) into a finished, polished, professional illustration. Keep the exact composition, poses, shapes and main colors of the sketch. ${what}. No text.`, aspect, [{ name: 'sketch', src: obj.img }]));
+      save(p);
+    });
+    render();
+  }
+}
+const drawBtns = (p, obj, kind) => [
+  btn('✏️ צייר', () => paintFor(p, obj, kind), 'sm'),
+  isPhone ? btn('📷 צלם', () => uploadImage(src => { obj.img = src; save(p); render(); }, true), 'sm') : null,
+];
 
 function providerBadge() {
   const t = textProviders()[0], i = imageProviders()[0];
@@ -851,6 +874,7 @@ function tabChars(p) {
       h('div', { class: 'row tight' },
         btn(c.img ? '🔄 צור מחדש' : '🎨 צור תמונה', () => withBusy('מצייר…', () => genCharImage(p, c)).then(render), 'sm primary'),
         c.img ? btn('🍌 ערוך', () => { const ins = prompt('מה לשנות בתמונה? (למשל: תן לו כובע קוסמים כחול, תחליף רקע ליער)'); if (ins) withBusy('עורך…', () => editCharImage(p, c, ins)).then(render); }, 'sm') : null,
+        drawBtns(p, c, 'char'),
         btn('📁 העלה', () => uploadImage(src => { c.img = src; save(p); render(); }), 'sm ghost'),
         btn('🗑', () => { if (!confirm('למחוק את ' + c.name + '?')) return; p.characters = p.characters.filter(x => x !== c); save(p); render(); }, 'sm ghost')),
       label('שם', inp(c, 'name')),
@@ -885,6 +909,7 @@ function tabScenes(p) {
         imgOr(s.img, 'scene-img', '🎞️ אין תמונה עדיין'),
         h('div', { class: 'row tight' },
           btn(s.img ? '🔄 צייר מחדש' : '🎨 צייר סצנה', () => withBusy('מצייר…', () => genSceneImage(p, s)).then(render), 'sm primary'),
+          drawBtns(p, s, 'scene'),
           btn('📁 העלה', () => uploadImage(src => { s.img = src; save(p); render(); }), 'sm ghost'),
           btn('▲', () => { if (i) { [ep.scenes[i - 1], ep.scenes[i]] = [ep.scenes[i], ep.scenes[i - 1]]; save(p); render(); } }, 'sm ghost'),
           btn('▼', () => { if (i < ep.scenes.length - 1) { [ep.scenes[i + 1], ep.scenes[i]] = [ep.scenes[i], ep.scenes[i + 1]]; save(p); render(); } }, 'sm ghost'),
@@ -1067,12 +1092,34 @@ function viewSettings() {
 }
 
 // =====================================================================
+// התקנה כאפליקציה (PWA)
+// =====================================================================
+function setupInstall() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  const b = $('#nav-install');
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (standalone) return;
+  let evt = null;
+  b.hidden = false;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); evt = e; });
+  window.addEventListener('appinstalled', () => { b.hidden = true; toast('האולפן הותקן! אפשר לפתוח אותו ממסך הבית 🎉', 'ok'); });
+  b.onclick = async () => {
+    if (evt) { evt.prompt(); const r = await evt.userChoice; evt = null; if (r.outcome === 'accepted') b.hidden = true; return; }
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    alert(ios
+      ? 'התקנה באייפון / אייפד:\n1. פתחו את האתר בספארי\n2. לחצו על כפתור השיתוף ⬆️ (למטה)\n3. בחרו "הוסף למסך הבית" ואז "הוסף"'
+      : 'התקנה:\n• במחשב (כרום / אדג׳): לחצו על סמל ההתקנה ⊕ בצד שורת הכתובת, או בתפריט ⋮ ← "התקן את אולפן AI"\n• באנדרואיד: בתפריט ⋮ של כרום ← "התקן אפליקציה" / "הוסף למסך הבית"');
+  };
+}
+
+// =====================================================================
 // הפעלה
 // =====================================================================
 (async () => {
   $('#nav-home').onclick = () => go('home');
   $('#nav-settings').onclick = () => go('settings');
   $('#logo').onclick = () => go('home');
+  setupInstall();
   try { projects = (await DB.all()).sort((a, b) => b.updated - a.updated); }
   catch (e) { toast('לא ניתן לפתוח את האחסון המקומי: ' + e.message, 'err'); }
   render();
