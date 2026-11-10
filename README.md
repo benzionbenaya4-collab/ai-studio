@@ -11,7 +11,7 @@
 
 ## הפעלה
 האתר: https://benzionbenaya4-collab.github.io/ai-studio/
-מפתח ג׳מיני חינמי: https://aistudio.google.com/apikey → מדביקים בהגדרות. המפתח נשמר רק בדפדפן ולא נכנס לקבצי המשחק המשותפים.
+אפשר להשתמש בכל מפתח AI: ג׳מיני (https://aistudio.google.com/apikey), Claude, ChatGPT/OpenAI, Groq, OpenRouter, DeepSeek, Mistral, Grok, Together או כל שירות תואם OpenAI – או בלי מפתח בכלל (Pollinations). מדביקים בהגדרות; המפתחות נשמרים רק בדפדפן ולא נכנסים לקבצי המשחק המשותפים.
 
 ## קבצים
 - `index.html` – המבנה והעיצוב

@@ -88,7 +88,39 @@ const SKEY = 'aiStudioSettings';
 const S = Object.assign({
   geminiKey: '', textProvider: 'auto', imageProvider: 'auto',
   textModel: 'gemini-2.5-flash', imageModel: 'gemini-2.5-flash-image',
+  claudeKey: '', claudeModel: 'claude-sonnet-5-5',
+  oaPreset: 'openai', oaBase: 'https://api.openai.com/v1', oaKey: '', oaTextModel: 'gpt-4.1-mini', oaImageModel: 'gpt-image-1',
 }, safeParse(localStorage.getItem(SKEY)) || {});
+
+// ספקים שמדברים בשפה של OpenAI: [שם, כתובת, מודל טקסט, מודל תמונות, איפה מקבלים מפתח]
+const OA_PRESETS = {
+  openai: ['OpenAI (ChatGPT)', 'https://api.openai.com/v1', 'gpt-4.1-mini', 'gpt-image-1', 'https://platform.openai.com/api-keys'],
+  groq: ['Groq – יש מסלול חינמי', 'https://api.groq.com/openai/v1', 'llama-3.3-70b-versatile', '', 'https://console.groq.com/keys'],
+  openrouter: ['OpenRouter – יש מודלים חינמיים', 'https://openrouter.ai/api/v1', 'meta-llama/llama-3.3-70b-instruct:free', '', 'https://openrouter.ai/keys'],
+  deepseek: ['DeepSeek', 'https://api.deepseek.com/v1', 'deepseek-chat', '', 'https://platform.deepseek.com/api_keys'],
+  mistral: ['Mistral', 'https://api.mistral.ai/v1', 'mistral-small-latest', '', 'https://console.mistral.ai/api-keys'],
+  xai: ['xAI (Grok)', 'https://api.x.ai/v1', 'grok-3-mini', 'grok-2-image', 'https://console.x.ai'],
+  together: ['Together AI', 'https://api.together.xyz/v1', 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', 'black-forest-labs/FLUX.1-schnell-Free', 'https://api.together.ai/settings/api-keys'],
+  custom: ['אחר – כל שירות תואם OpenAI', '', '', '', ''],
+};
+function applyPreset(k) {
+  const pr = OA_PRESETS[k]; if (!pr) return;
+  S.oaPreset = k;
+  if (k !== 'custom') { S.oaBase = pr[1]; S.oaTextModel = pr[2]; S.oaImageModel = pr[3]; }
+  saveSettings();
+}
+// מזהה לאיזו חברה שייך מפתח לפי ההתחלה שלו
+function detectKey(key) {
+  key = String(key || '').trim();
+  if (!key) return null;
+  if (/^AIza/.test(key)) { S.geminiKey = key; saveSettings(); return 'Google Gemini 🍌'; }
+  if (/^sk-ant-/.test(key)) { S.claudeKey = key; saveSettings(); return 'Anthropic Claude'; }
+  const pre = /^gsk_/.test(key) ? 'groq' : /^sk-or-/.test(key) ? 'openrouter' : /^xai-/.test(key) ? 'xai' : /^sk-/.test(key) ? 'openai' : null;
+  if (pre) { applyPreset(pre); S.oaKey = key; saveSettings(); return OA_PRESETS[pre][0] + (pre === 'openai' ? ' (אם זה בעצם DeepSeek – בחרו אותו ברשימה למטה)' : ''); }
+  return null;
+}
+const PNAME = { gemini: 'ג׳מיני', claude: 'Claude', openai: () => (OA_PRESETS[S.oaPreset] || ['שירות AI'])[0].split(' – ')[0], pollinations: 'Pollinations – חינמי' };
+const pname = p => typeof PNAME[p] === 'function' ? PNAME[p]() : (PNAME[p] || 'מובנה (בלי AI)');
 const saveSettings = () => { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch {} };
 
 // =====================================================================
@@ -131,12 +163,47 @@ async function pollText(prompt, json) {
   return t;
 }
 
+async function oaText(prompt, json) {
+  const base = String(S.oaBase || '').replace(/\/+$/, '');
+  if (!base) throw new Error('חסרה כתובת השירות בהגדרות');
+  const call = withFormat => fetchT(base + '/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + S.oaKey },
+    body: JSON.stringify({
+      model: S.oaTextModel, temperature: 1,
+      messages: [{ role: 'system', content: json ? 'You are a creative screenwriter. Reply with valid JSON only, no markdown.' : 'You are a creative screenwriter.' }, { role: 'user', content: prompt }],
+      ...(withFormat ? { response_format: { type: 'json_object' } } : {}),
+    }),
+  });
+  let r = await call(json);
+  if (!r.ok && json && r.status === 400) r = await call(false);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d.error && (d.error.message || d.error)) || 'HTTP ' + r.status);
+  const t = d.choices?.[0]?.message?.content;
+  if (!t) throw new Error('השירות החזיר תשובה ריקה');
+  return t;
+}
+
+async function claudeText(prompt, json) {
+  const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': S.claudeKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: S.claudeModel, max_tokens: 8000, messages: [{ role: 'user', content: prompt + (json ? '\n\nReply with valid JSON only, no markdown.' : '') }] }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error?.message || 'HTTP ' + r.status);
+  const t = (d.content || []).map(c => c.text || '').join('');
+  if (!t) throw new Error('Claude החזיר תשובה ריקה');
+  return t;
+}
+
+const TEXT_FN = { gemini: geminiText, claude: claudeText, openai: oaText, pollinations: pollText };
+const hasKey = p => p === 'pollinations' || !!({ gemini: S.geminiKey, claude: S.claudeKey, openai: S.oaKey }[p]);
+
 function textProviders() {
   const p = S.textProvider;
   if (p === 'offline') return [];
-  if (p === 'gemini') return S.geminiKey ? ['gemini'] : [];
-  if (p === 'pollinations') return ['pollinations'];
-  return S.geminiKey ? ['gemini', 'pollinations'] : ['pollinations'];
+  if (p !== 'auto') return hasKey(p) ? [p] : [];
+  return ['gemini', 'claude', 'openai', 'pollinations'].filter(hasKey);
 }
 
 function parseJSON(t) {
@@ -150,8 +217,8 @@ function parseJSON(t) {
 async function aiJSON(prompt, label) {
   const errs = [];
   for (const p of textProviders()) {
-    busy.set(`${label} (${p === 'gemini' ? 'ג׳מיני' : 'Pollinations – חינמי'})…`);
-    try { return parseJSON(p === 'gemini' ? await geminiText(prompt, true) : await pollText(prompt, true)); }
+    busy.set(`${label} (${pname(p)})…`);
+    try { return parseJSON(await TEXT_FN[p](prompt, true)); }
     catch (e) { errs.push(`${p}: ${e.message}`); }
   }
   if (errs.length) toast('ה-AI לא הצליח, משתמש במחולל המובנה. ' + errs.join(' | '), 'warn');
@@ -202,12 +269,33 @@ async function pollImage(prompt, aspect) {
   return await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
 }
 
+async function oaImage(prompt, aspect) {
+  const base = String(S.oaBase || '').replace(/\/+$/, '');
+  if (!S.oaImageModel) throw new Error('לא הוגדר מודל תמונות לשירות הזה');
+  const dalle = /dall-e-3/i.test(S.oaImageModel);
+  const size = { '1:1': '1024x1024', '3:4': dalle ? '1024x1792' : '1024x1536', '16:9': dalle ? '1792x1024' : '1536x1024' }[aspect] || '1024x1024';
+  const r = await fetchT(base + '/images/generations', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + S.oaKey },
+    body: JSON.stringify({ model: S.oaImageModel, prompt: prompt.slice(0, 3800), n: 1, size, ...(dalle ? { response_format: 'b64_json' } : {}) }),
+  }, 180000);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d.error && (d.error.message || d.error)) || 'HTTP ' + r.status);
+  const it = d.data?.[0];
+  if (it?.b64_json) return 'data:image/png;base64,' + it.b64_json;
+  if (it?.url) {
+    try { const b = await (await fetchT(it.url, {}, 60000)).blob(); return await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(b); }); }
+    catch { return it.url; }
+  }
+  throw new Error('השירות לא החזיר תמונה');
+}
+
+const IMAGE_FN = { gemini: geminiImage, openai: oaImage, pollinations: pollImage };
 function imageProviders() {
   const p = S.imageProvider;
+  const ok = x => x === 'pollinations' || (x === 'gemini' && S.geminiKey) || (x === 'openai' && S.oaKey && S.oaImageModel);
   if (p === 'offline') return [];
-  if (p === 'gemini') return S.geminiKey ? ['gemini'] : [];
-  if (p === 'pollinations') return ['pollinations'];
-  return S.geminiKey ? ['gemini', 'pollinations'] : ['pollinations'];
+  if (p !== 'auto') return ok(p) ? [p] : [];
+  return ['gemini', 'openai', 'pollinations'].filter(ok);
 }
 
 // ציור חלופי מובנה – כדי שהאולפן יעבוד גם בלי אינטרנט / בלי AI
@@ -252,8 +340,8 @@ function compress(src, max = 1024, q = 0.86) {
 async function aiImage(prompt, { aspect = '1:1', refs = [], label = 'תמונה', kind = 'scene', fallbackLabel = '' } = {}) {
   const errs = [];
   for (const p of imageProviders()) {
-    busy.set(`מצייר ${label} (${p === 'gemini' ? 'ג׳מיני ננו בננה 🍌' : 'Pollinations – חינמי'})…`);
-    try { return await compress(p === 'gemini' ? await geminiImage(prompt, aspect, refs) : await pollImage(prompt, aspect)); }
+    busy.set(`מצייר ${label} (${p === 'gemini' ? 'ג׳מיני ננו בננה 🍌' : pname(p)})…`);
+    try { return await compress(await IMAGE_FN[p](prompt, aspect, refs)); }
     catch (e) { errs.push(`${p}: ${e.message}`); }
   }
   if (errs.length) toast('יצירת התמונה נכשלה, נוצר ציור זמני. ' + errs.join(' | '), 'warn');
@@ -438,7 +526,7 @@ async function genCharImage(p, c) {
 }
 
 async function editCharImage(p, c, instruction) {
-  if (!S.geminiKey || S.imageProvider === 'pollinations' || S.imageProvider === 'offline') {
+  if (imageProviders()[0] !== 'gemini') {
     toast('עריכת תמונה קיימת עובדת רק עם ג׳מיני ננו בננה. יוצר במקום זה תמונה חדשה לפי ההוראה…', 'warn');
     c.img = await aiImage(charPrompt(p, c) + ' ' + instruction, { label: `את ${c.name}`, kind: 'char', fallbackLabel: c.name });
   } else {
@@ -645,7 +733,7 @@ function uploadImage(cb) {
 
 function providerBadge() {
   const t = textProviders()[0], i = imageProviders()[0];
-  const n = x => x === 'gemini' ? 'ג׳מיני' : x === 'pollinations' ? 'Pollinations (חינמי)' : 'מובנה (בלי AI)';
+  const n = x => x ? pname(x) : 'מובנה (בלי AI)';
   return h('div', { class: 'badge-line' }, `✍️ עלילה: ${n(t)}  ·  🎨 תמונות: ${n(i)}${i === 'gemini' ? ' 🍌' : ''}  `, h('a', { href: '#', onclick: e => { e.preventDefault(); go('settings'); } }, 'שינוי בהגדרות'));
 }
 
@@ -703,7 +791,7 @@ function viewHome() {
       h('h1', {}, 'אולפן ה-AI שלך'),
       h('p', {}, 'יוצרים דמויות עם ג׳מיני ננו בננה 🍌, כותבים עלילה עם AI חינמי, מרכיבים סרט או סדרה – ואז הופכים אותם למשחק שאפשר לשתף ולראות כמה אנשים שיחקו בו.'),
       h('ol', { class: 'steps' }, ['עלילה', 'דמויות', 'סצנות', 'קולנוע', 'משחק', 'סטטיסטיקה'].map((s, i) => h('li', {}, h('b', {}, i + 1), s))),
-      !S.geminiKey ? h('p', { class: 'tip' }, '💡 עובד מיד בחינם (Pollinations). לתמונות של ננו בננה – הוסיפו מפתח ג׳מיני חינמי ב', h('a', { href: '#', onclick: e => { e.preventDefault(); go('settings'); } }, 'הגדרות'), '.') : null),
+      !(S.geminiKey || S.claudeKey || S.oaKey) ? h('p', { class: 'tip' }, '💡 עובד מיד בחינם (Pollinations). לאיכות גבוהה יותר – הוסיפו מפתח AI (ג׳מיני, ChatGPT, Claude ועוד) ב', h('a', { href: '#', onclick: e => { e.preventDefault(); go('settings'); } }, 'הגדרות'), '.') : null),
     form,
     h('div', { class: 'row space' }, h('h2', {}, '📁 הפרויקטים שלי'),
       btn('📥 ייבוא פרויקט', () => {
@@ -910,28 +998,69 @@ function tabStats(p) {
 const statTile = (icon, t, v) => h('div', { class: 'stat' }, h('div', { class: 'ic' }, icon), h('div', { class: 'v' }, v), h('div', { class: 'l' }, t));
 
 // ---------- הגדרות ----------
+function testBtn(fn) {
+  const out = h('span', { class: 'muted' });
+  return h('div', { class: 'row' }, btn('בדיקת חיבור', async () => {
+    out.textContent = 'בודק…';
+    try { await fn('Reply with the single word: OK', false); out.textContent = '✅ מחובר!'; }
+    catch (e) { out.textContent = '❌ ' + e.message; }
+  }, 'sm'), out);
+}
+
 function viewSettings() {
-  const test = h('span', { class: 'muted' });
+  const any = { k: '' }, detOut = h('span', { class: 'muted' });
+  const pr = OA_PRESETS[S.oaPreset] || OA_PRESETS.custom;
+  const ss = () => { saveSettings(); };
   return h('div', { class: 'card settings' },
     h('h2', {}, '⚙️ הגדרות AI'),
-    h('h3', {}, '🍌 ג׳מיני (Nano Banana) – מומלץ'),
-    h('p', {}, 'מפתח חינמי מקבלים תוך דקה ב-', h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'Google AI Studio'), ' (מתחברים עם חשבון גוגל ← Create API key). המפתח נשמר רק בדפדפן שלך ונשלח רק לגוגל.'),
-    label('מפתח Gemini API', inp(S, 'geminiKey', { type: 'password', ph: 'AIza…', dir: 'ltr', onInput: saveSettings })),
-    h('div', { class: 'row' }, btn('בדיקת חיבור', async () => {
-      test.textContent = 'בודק…';
-      try { await geminiText('Reply with the single word: OK', false); test.textContent = '✅ ג׳מיני מחובר!'; }
-      catch (e) { test.textContent = '❌ ' + e.message; }
-    }, 'sm'), test),
-    h('div', { class: 'grid2' },
-      label('מודל לעלילה', inp(S, 'textModel', { dir: 'ltr', onInput: saveSettings })),
-      label('מודל לתמונות', inp(S, 'imageModel', { dir: 'ltr', onInput: saveSettings }))),
-    h('p', { class: 'muted' }, 'ברירת מחדל: gemini-2.5-flash לעלילה (יש לו מכסה חינמית נדיבה) ו-gemini-2.5-flash-image ("ננו בננה") לתמונות. לננו בננה Pro כתבו gemini-3-pro-image-preview. שימו לב: גוגל לפעמים מגבילה יצירת תמונות במסלול החינמי – אם מופיעה שגיאת מכסה, האולפן עובר אוטומטית ל-Pollinations החינמי.'),
+    h('p', { class: 'muted' }, 'אפשר להשתמש בכל מפתח AI שיש לך – או בלי מפתח בכלל (Pollinations החינמי). המפתחות נשמרים רק בדפדפן הזה, נשלחים רק לחברה שהנפיקה אותם, ולא נכנסים למשחקים שאתם משתפים.'),
+
+    h('h3', {}, '🔑 הדבקה מהירה של כל מפתח'),
+    h('div', { class: 'row' },
+      h('div', { class: 'fld', style: 'min-width:240px' }, inp(any, 'k', { type: 'password', ph: 'הדביקו כאן מפתח של ג׳מיני, ChatGPT, Claude, Groq, OpenRouter, Grok…', dir: 'ltr' })),
+      btn('זהה ושמור', () => {
+        const who = detectKey(any.k);
+        if (who) { toast('המפתח נשמר: ' + who, 'ok'); render(); }
+        else detOut.textContent = 'לא זיהיתי את סוג המפתח – בחרו את השירות ידנית ב"שירות AI נוסף" למטה והדביקו שם.';
+      }, 'primary'), detOut),
     h('hr'),
+
+    h('h3', {}, '🍌 Google Gemini (כולל ננו בננה לתמונות)'),
+    h('p', { class: 'muted' }, 'מפתח חינמי: ', h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'aistudio.google.com/apikey'), ' (עם חשבון Gmail פרטי, מגיל 18).'),
+    label('מפתח Gemini', inp(S, 'geminiKey', { type: 'password', ph: 'AIza…', dir: 'ltr', onInput: ss })),
+    h('div', { class: 'grid2' },
+      label('מודל לעלילה', inp(S, 'textModel', { dir: 'ltr', onInput: ss })),
+      label('מודל לתמונות', inp(S, 'imageModel', { dir: 'ltr', onInput: ss }))),
+    testBtn(geminiText),
+    h('hr'),
+
+    h('h3', {}, '🤖 Anthropic Claude (לכתיבת עלילה)'),
+    h('p', { class: 'muted' }, 'מפתח: ', h('a', { href: 'https://console.anthropic.com/settings/keys', target: '_blank', rel: 'noopener' }, 'console.anthropic.com'), '. Claude כותב עלילות מצוינות, אבל לא מצייר תמונות.'),
+    h('div', { class: 'grid2' },
+      label('מפתח Claude', inp(S, 'claudeKey', { type: 'password', ph: 'sk-ant-…', dir: 'ltr', onInput: ss })),
+      label('מודל', inp(S, 'claudeModel', { dir: 'ltr', onInput: ss }))),
+    testBtn(claudeText),
+    h('hr'),
+
+    h('h3', {}, '🌐 שירות AI נוסף (ChatGPT, Groq, OpenRouter, DeepSeek, Grok ועוד)'),
+    h('div', { class: 'grid2' },
+      label('שירות', sel(S, 'oaPreset', Object.entries(OA_PRESETS).map(([k, v]) => [k, v[0]]), k => { applyPreset(k); render(); })),
+      label('מפתח', inp(S, 'oaKey', { type: 'password', ph: 'sk-…', dir: 'ltr', onInput: ss }))),
+    pr[4] ? h('p', { class: 'muted' }, 'איפה מקבלים מפתח: ', h('a', { href: pr[4], target: '_blank', rel: 'noopener' }, pr[4])) : null,
+    h('div', { class: 'grid2' },
+      label('כתובת השירות (Base URL)', inp(S, 'oaBase', { dir: 'ltr', ph: 'https://…/v1', onInput: ss })),
+      label('מודל לעלילה', inp(S, 'oaTextModel', { dir: 'ltr', onInput: ss })),
+      label('מודל לתמונות (ריק = השירות לא מצייר)', inp(S, 'oaImageModel', { dir: 'ltr', onInput: ss }))),
+    testBtn(oaText),
+    h('p', { class: 'muted' }, 'שמות המודלים משתנים מדי פעם – אם מופיעה שגיאת "model not found", העתיקו שם מודל עדכני מהאתר של השירות. יש שירותים שחוסמים שימוש ישיר מדפדפן; במקרה כזה האולפן יעבור אוטומטית לשירות הבא.'),
+    h('hr'),
+
     h('h3', {}, 'מי עושה מה?'),
     h('div', { class: 'grid2' },
-      label('✍️ כתיבת עלילה', sel(S, 'textProvider', [['auto', 'אוטומטי (ג׳מיני ← Pollinations ← מובנה)'], ['gemini', 'רק ג׳מיני'], ['pollinations', 'רק Pollinations (חינמי, בלי מפתח)'], ['offline', 'מחולל מובנה (בלי אינטרנט)']], saveSettings)),
-      label('🎨 ציור תמונות', sel(S, 'imageProvider', [['auto', 'אוטומטי (ננו בננה ← Pollinations ← מובנה)'], ['gemini', 'רק ג׳מיני ננו בננה'], ['pollinations', 'רק Pollinations (חינמי, בלי מפתח)'], ['offline', 'ציור מובנה פשוט (בלי אינטרנט)']], saveSettings))),
-    h('p', { class: 'muted' }, 'Pollinations.ai הוא שירות AI חינמי שלא דורש הרשמה – מצוין להתחלה. ננו בננה נותן תמונות איכותיות יותר ושומר על מראה הדמויות זהה בין הסצנות.'),
+      label('✍️ כתיבת עלילה', sel(S, 'textProvider', [['auto', 'אוטומטי – הראשון שיש לו מפתח, ואז Pollinations'], ['gemini', 'רק ג׳מיני'], ['claude', 'רק Claude'], ['openai', 'רק השירות הנוסף'], ['pollinations', 'רק Pollinations (חינמי, בלי מפתח)'], ['offline', 'מחולל מובנה (בלי אינטרנט)']], ss)),
+      label('🎨 ציור תמונות', sel(S, 'imageProvider', [['auto', 'אוטומטי – ננו בננה ← השירות הנוסף ← Pollinations'], ['gemini', 'רק ג׳מיני ננו בננה'], ['openai', 'רק השירות הנוסף'], ['pollinations', 'רק Pollinations (חינמי, בלי מפתח)'], ['offline', 'ציור מובנה פשוט (בלי אינטרנט)']], ss))),
+    providerBadge(),
+    h('p', { class: 'muted' }, 'ננו בננה הוא היחיד ששומר על מראה הדמויות זהה בין הסצנות (הוא מקבל את תמונות הדמויות כרפרנס). שאר השירותים מציירים לפי התיאור בלבד.'),
     h('hr'),
     h('h3', {}, '🗂️ נתונים'),
     h('p', { class: 'muted' }, 'כל הפרויקטים נשמרים בדפדפן הזה בלבד. כדי לא לאבד אותם – השתמשו ב"גיבוי לקובץ" בתוך כל פרויקט.'));
